@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Deploy to production directory
         run: |
-          cd /opt/mealie-planner
+          cd /home/nathan/projects/mealie-planner
           git fetch origin main
           git reset --hard origin/main
           git submodule update --init --recursive
