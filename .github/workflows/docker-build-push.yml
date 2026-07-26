@@ -38,5 +38,5 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ghcr.io/ncrosty58/mealie-planner:latest
-            ghcr.io/ncrosty58/mealie-planner:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/mealie-planner:latest
+            ghcr.io/${{ github.repository_owner }}/mealie-planner:${{ github.sha }}
