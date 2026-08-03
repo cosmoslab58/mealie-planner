@@ -4,6 +4,12 @@ services:
     build: .
     container_name: mealie-planner
     restart: always
+    labels:
+      # The deploy workflow owns this container (compose up on every push).
+      # Watchtower must not also recreate it from new GHCR images — a
+      # watchtower-recreated container loses its compose project label and
+      # the next compose deploy fails with a container-name conflict.
+      - com.centurylinklabs.watchtower.enable=false
     ports:
       - "9926:9926"
     volumes:
