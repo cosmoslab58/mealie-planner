@@ -5,10 +5,11 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # Load .env file explicitly
-load_dotenv('/opt/mealie-planner/.env')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(REPO_ROOT, '.env'))
 
 # Add project root to path
-sys.path.insert(0, '/opt/mealie-planner')
+sys.path.insert(0, REPO_ROOT)
 
 from mealie_planner.ai_client import AIClient
 from mealie_planner.recipe_nutrition import RecipeNutrition

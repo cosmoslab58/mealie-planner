@@ -6,7 +6,8 @@ from email.mime.text import MIMEText
 from dotenv import load_dotenv
 
 # Load .env file explicitly
-load_dotenv('/opt/mealie-planner/.env')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(REPO_ROOT, '.env'))
 
 def send_developer_email():
     smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')

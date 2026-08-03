@@ -12,7 +12,7 @@ recipient_emails: person_a@example.com,person_b@example.com
 This skill contains the constraints, business rules, and integration workflows for managing the weekly companion meal planner.
 
 ## When to use this skill
-- Use this when editing, debugging, or maintaining the `mealie-planner` application code under `/opt/mealie-planner`.
+- Use this when editing, debugging, or maintaining the `mealie-planner` application code under `~/projects/mealie-planner`.
 - Use this when modifying database sync rules, dietary filtering logic, or scheduling scripts.
 - Use this when resolving issues related to shopping list calculations, Blackstone griddle checks, or nutrition summaries.
 
