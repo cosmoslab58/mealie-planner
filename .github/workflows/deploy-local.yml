@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+  # Manual re-run. A push that never produces a run -- an Actions outage, a
+  # missed webhook -- otherwise leaves main sitting undeployed with nothing to
+  # say so: the commit is on main, both working trees look clean, and prod is
+  # quietly stale. Without this the only recourse is hand-deploying on bodhi.
+  # Safe from any ref: the job hard-resets the host checkout to origin/main
+  # regardless of what this is dispatched from.
+  workflow_dispatch:
 
 jobs:
   deploy:

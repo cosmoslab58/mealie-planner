@@ -1,6 +1,13 @@
-.env
+# .env* not .env -- an exact match left backups like .env.bak-svc-cutover
+# untracked but NOT ignored, so a `git add -A` would stage real credentials
+# into this public repo.
+.env*
 __pycache__/
 *.pyc
+# Per-repo venv, machine-local (fritz and bodhi build their own). Mutagen
+# already skips it; git did not.
+venv/
+.venv/
 .pytest_cache/
 .antigravitycli/
 *.log
