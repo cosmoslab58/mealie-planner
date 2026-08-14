@@ -57,8 +57,13 @@ class EmailNotifier:
         from_email = os.getenv('SMTP_FROM_EMAIL')
         from_name = os.getenv('SMTP_FROM_NAME', 'Mealie Planner')
 
-        if not smtp_user or not smtp_pass:
-            logger.warning("SMTP settings are missing. Cannot send email.")
+        # SMTP_USER/SMTP_PASSWORD are optional. The lab relay on 192.168.4.114:25
+        # takes no credentials at all: it accepts this host by IP via postfix
+        # `mynetworks` and does the authenticated hop to Purelymail itself, so the
+        # provider password lives in exactly one place instead of in every app.
+        # A host is still required.
+        if not smtp_host:
+            logger.warning("SMTP_HOST is not set. Cannot send email.")
             return False
 
         # Fetch recipients dynamically from all registered Mealie users
@@ -91,8 +96,15 @@ class EmailNotifier:
 
         try:
             with smtplib.SMTP(smtp_host, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
+                # Only negotiate TLS and authenticate when a credential is actually
+                # configured, so pointing SMTP_HOST straight at an authenticating
+                # provider keeps working exactly as before. Against the lab relay
+                # both steps must be skipped: it presents the stock self-signed
+                # snakeoil certificate, which starttls() rejects on modern Python,
+                # and it has no SASL backend, so AUTH returns 503.
+                if smtp_user and smtp_pass:
+                    server.starttls()
+                    server.login(smtp_user, smtp_pass)
                 server.sendmail(from_email, recipients, msg.as_string())
             logger.info(f"Successfully sent email: '{subject}' to {recipients}")
             return True
