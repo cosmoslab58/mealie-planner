@@ -45,6 +45,24 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Mealie meal-plan entries this app created. Anything in Mealie's calendar
+    # that is NOT listed here was put there by a human in Mealie's own Meal
+    # Planner, and regeneration must leave it alone.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS plan_entries (
+            entry_id TEXT PRIMARY KEY,
+            date TEXT,
+            entry_type TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Bookkeeping that must not leak into the user-facing settings dict.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS plan_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
     conn.commit()
 
 
@@ -160,3 +178,105 @@ def clear_chat_history_in_db(session_id="default"):
                 json.dump({"history": [], "messages": []}, f)
         except OSError as e:
             logger.error("Error resetting legacy chat history JSON: %s", e)
+
+
+# --- Meal-plan entry ownership -------------------------------------------
+#
+# Mealie's calendar is shared: this app writes to it, and a human can write to
+# it from Mealie's own Meal Planner UI. Regeneration clears the week before
+# rewriting it, so without a record of which entries are ours, a hand-added
+# meal is silently deleted. These helpers keep that record.
+
+
+def record_plan_entry(entry_id, date=None, entry_type=None):
+    """Remember that this app created a Mealie meal-plan entry."""
+    if not entry_id:
+        return
+    init_db()
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO plan_entries (entry_id, date, entry_type) VALUES (?, ?, ?)",
+            (str(entry_id), date, entry_type)
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error("Error recording plan entry %s: %s", entry_id, e)
+
+
+def forget_plan_entry(entry_id):
+    """Drop the ownership record for an entry that no longer exists in Mealie."""
+    if not entry_id:
+        return
+    init_db()
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM plan_entries WHERE entry_id = ?", (str(entry_id),))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error("Error forgetting plan entry %s: %s", entry_id, e)
+
+
+def filter_planner_owned(entry_ids):
+    """Return the subset of entry_ids this app created."""
+    ids = [str(i) for i in entry_ids if i]
+    if not ids:
+        return set()
+    init_db()
+    conn = get_db()
+    try:
+        owned = set()
+        # Chunked to stay under SQLite's variable limit on very large weeks.
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT entry_id FROM plan_entries WHERE entry_id IN ({placeholders})",
+                chunk
+            ).fetchall()
+            owned.update(row['entry_id'] for row in rows)
+        return owned
+    except sqlite3.Error as e:
+        logger.error("Error reading plan entry ownership: %s", e)
+        # Fail closed: an unreadable ownership table must not license a wipe.
+        return set()
+
+
+def adopt_plan_entries(entries):
+    """Claim existing Mealie entries as ours (one-time upgrade path)."""
+    for entry in entries or []:
+        record_plan_entry(entry.get('id'), entry.get('date'), entry.get('entryType'))
+
+
+def prune_plan_entries(before_date):
+    """Forget ownership records for weeks now in the past."""
+    if not before_date:
+        return
+    init_db()
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM plan_entries WHERE date IS NOT NULL AND date < ?", (before_date,))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error("Error pruning plan entries: %s", e)
+
+
+def get_plan_meta(key):
+    init_db()
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT value FROM plan_meta WHERE key = ?", (key,)).fetchone()
+        return row['value'] if row else None
+    except sqlite3.Error as e:
+        logger.error("Error reading plan meta %s: %s", key, e)
+        return None
+
+
+def set_plan_meta(key, value):
+    init_db()
+    conn = get_db()
+    try:
+        conn.execute("INSERT OR REPLACE INTO plan_meta (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.error("Error writing plan meta %s: %s", key, e)

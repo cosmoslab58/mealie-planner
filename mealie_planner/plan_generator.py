@@ -11,11 +11,66 @@ from .config import (
     RECENT_LOOKBACK_DAYS,
     get_banned_recipes,
 )
+from .database import (
+    adopt_plan_entries,
+    filter_planner_owned,
+    get_plan_meta,
+    prune_plan_entries,
+    set_plan_meta,
+)
 from .exceptions import MealieAPIError
 from .models import WeeklyMealPlanResponse
 from .parsers import parse_exclusions, parse_freezer_items
 
 logger = logging.getLogger(__name__)
+
+# Set once, the first time a plan is generated after ownership tracking shipped.
+# Before that marker exists every entry in Mealie's calendar came from this app,
+# so the first run adopts what it finds rather than stranding a week of meals.
+OWNERSHIP_SINCE_KEY = "plan_ownership_since"
+# How far back ownership rows are kept before being pruned.
+OWNERSHIP_RETENTION_DAYS = 180
+
+
+def resolve_owned_entries(existing_plans):
+    """Return the ids of the given Mealie entries that this app is allowed to clear.
+
+    Entries created by a human in Mealie's own Meal Planner are not ours, and
+    deleting them is silent data loss.
+    """
+    existing_plans = existing_plans or []
+    entry_ids = [p.get('id') for p in existing_plans if p.get('id')]
+
+    if not get_plan_meta(OWNERSHIP_SINCE_KEY):
+        # One-time upgrade path: claim the calendar as it stands today.
+        adopt_plan_entries(existing_plans)
+        set_plan_meta(OWNERSHIP_SINCE_KEY, datetime.now().isoformat(timespec='seconds'))
+        logger.info(
+            "[Ownership] Adopted %d pre-existing meal-plan entries on first tracked run.",
+            len(entry_ids)
+        )
+        return set(str(i) for i in entry_ids)
+
+    return filter_planner_owned(entry_ids)
+
+
+def _prune_stale_ownership(start_date_str):
+    """Forget ownership rows for long-past weeks so the table stays small.
+
+    The cutoff is generous: regenerating a recent previous week must still find
+    its own entries.
+    """
+    try:
+        cutoff = datetime.strptime(start_date_str, "%Y-%m-%d") - timedelta(days=OWNERSHIP_RETENTION_DAYS)
+        prune_plan_entries(cutoff.strftime("%Y-%m-%d"))
+    except (ValueError, TypeError) as e:
+        logger.warning("Skipping ownership prune for %r: %s", start_date_str, e)
+
+
+def slot_key(entry):
+    """(date, entryType) identity of a meal-plan entry, for slot comparison."""
+    return (str(entry.get('date') or '')[:10], entry.get('entryType'))
+
 
 def classify_early_late_dates(target_date_strings):
     """Split the planning range into 'early' (fresh/perishable) and 'late'
@@ -44,6 +99,26 @@ class PlanGenerator:
         self.crawler = crawler
         self.shopping = shopping
         self.notifier = notifier
+
+    def clear_owned_entries(self, start_date_str, end_date_str):
+        """Delete this app's meal-plan entries for the week, leaving a human's alone.
+
+        Returns the set of (date, entryType) slots that were left in place, so the
+        caller can plan around them instead of scheduling a duplicate on top.
+        """
+        protected_slots = set()
+        _prune_stale_ownership(start_date_str)
+        try:
+            existing_plans = self.client.get_meal_plan(start_date_str, end_date_str)
+            owned_ids = resolve_owned_entries(existing_plans)
+            for entry in existing_plans:
+                if str(entry.get('id')) in owned_ids:
+                    self.client.delete_meal_plan_entry(entry['id'])
+                else:
+                    protected_slots.add(slot_key(entry))
+        except MealieAPIError as e:
+            logger.error(f"Error clearing existing plans: {e}")
+        return protected_slots
 
     def generate_weekly_plan(self, start_date_str, end_date_str, exclude_text="", freezer_items="", special_requests="", low_staples_ids=None, progress_callback=None, list_id=ACTIVE_LIST_ID):
         """Generate weekly plan using an AI-driven intelligent rule-based scoring engine and schedule in Mealie."""
@@ -303,17 +378,28 @@ class PlanGenerator:
 
         if progress_callback:
             progress_callback("Clearing old scheduled meals in Mealie calendar...", 70)
-        
-        try:
-            existing_plans = self.client.get_meal_plan(start_date_str, end_date_str)
-            for p in existing_plans:
-                self.client.delete_meal_plan_entry(p['id'])
-        except MealieAPIError as e:
-            logger.error(f"Error clearing existing plans: {e}")
-            
+
+        # Slots a human filled in from Mealie's own Meal Planner. We neither
+        # delete those entries nor schedule over them.
+        protected_slots = self.clear_owned_entries(start_date_str, end_date_str)
+
+        if protected_slots:
+            kept = ", ".join(
+                f"{date} {entry_type}" for date, entry_type in sorted(protected_slots)
+            )
+            logger.info("[Ownership] Kept %d entry/entries added in Mealie: %s", len(protected_slots), kept)
+            if progress_callback:
+                progress_callback(
+                    f"Kept {len(protected_slots)} meal(s) you added in Mealie ({kept}); planning around them...",
+                    75
+                )
+
         if progress_callback:
             progress_callback("Scheduling new breakfasts, lunches, and dinners...", 80)
         for m in meals:
+            if (m['date'], m['entryType']) in protected_slots:
+                logger.info("[Ownership] Skipping %s %s; that slot is yours.", m['date'], m['entryType'])
+                continue
             try:
                 self.client.schedule_meal(
                     date_str=m['date'],

@@ -6,6 +6,30 @@ This companion app interfaces with your Mealie instance to automate weekly menu 
 
 ---
 
+## 🤝 How this splits with Mealie
+
+Mealie is not a redundant backend here; it owns the parts that are genuinely
+expensive to rebuild, and this app owns the week.
+
+| Mealie owns | This app owns |
+|---|---|
+| Recipes, and importing them from a URL (`recipe-scrapers` plus schema.org fallbacks, maintained against sites that keep changing) | Which recipes get cooked on which day |
+| The canonical foods and units tables, which is what lets shopping-list items dedupe by UUID instead of by fuzzy string match | Shopping list curation and sync |
+| Recipe images and assets | Weekly and daily briefing emails |
+| The recipe reader you actually open at the stove | The AI chat for plan adjustments |
+
+Practical consequences:
+
+* **Recipe titles, images, and ingredients are edited in Mealie**, never here.
+* **Mealie's own Meal Planner and Shopping List pages still work**, and nothing
+  hides them. If you add a meal there, this app will keep it: regeneration
+  clears only the entries it created (see below) and plans around yours.
+* This app's meal-plan writes go through `PlanGenerator.clear_owned_entries`,
+  which consults the `plan_entries` ownership table in the local SQLite. An
+  entry that is not recorded there was put in Mealie's calendar by a human and
+  is never deleted. If that ownership table is ever lost, the next generation
+  re-adopts whatever it finds, which is the pre-tracking behavior.
+
 ## 🚀 Quick Start (Docker Compose)
 
 Get up and running with standard Docker commands:

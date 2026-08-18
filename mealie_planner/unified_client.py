@@ -33,6 +33,28 @@ _recipes_cache_ts = 0
 # recipe is edited out-of-band (e.g. by the MCP chat subprocess, whose cache is separate).
 RECIPE_CACHE_TTL = int(os.getenv('RECIPE_CACHE_TTL', '600'))
 
+def _record_owned_entry(entry_id, date_str=None, entry_type=None):
+    """Best-effort ownership bookkeeping; never let it break scheduling."""
+    if not entry_id:
+        return
+    try:
+        from .database import record_plan_entry
+        record_plan_entry(entry_id, date_str, entry_type)
+    except Exception as e:
+        logger.warning("Could not record meal-plan entry ownership for %s: %s", entry_id, e)
+
+
+def _forget_owned_entry(entry_id):
+    """Best-effort ownership bookkeeping; never let it break deletion."""
+    if not entry_id:
+        return
+    try:
+        from .database import forget_plan_entry
+        forget_plan_entry(entry_id)
+    except Exception as e:
+        logger.warning("Could not clear meal-plan entry ownership for %s: %s", entry_id, e)
+
+
 def is_retryable_exception(exception):
     """Determine if a request failure should trigger a retry attempt."""
     if isinstance(exception, httpx.RequestError):
@@ -184,7 +206,9 @@ class UnifiedMealieClient(MealieFetcher):
 
     def delete_meal_plan_entry(self, entry_id: str):
         """Missing method in MealieFetcher to delete a meal plan entry."""
-        return self._handle_request("DELETE", f"/api/households/mealplans/{entry_id}")
+        result = self._handle_request("DELETE", f"/api/households/mealplans/{entry_id}")
+        _forget_owned_entry(entry_id)
+        return result
 
     def schedule_meal(self, date_str: str, entry_type: str, recipe_id: Optional[str] = None, title: Optional[str] = None, text: Optional[str] = None):
         """Legacy alias for create_mealplan, adding support for prep notes (text)."""
@@ -198,8 +222,13 @@ class UnifiedMealieClient(MealieFetcher):
             payload["title"] = title
         if text:
             payload["text"] = text
-            
-        return self._handle_request("POST", "/api/households/mealplans", json=payload)
+
+        created = self._handle_request("POST", "/api/households/mealplans", json=payload)
+        # Claim the entry so regeneration knows it may clear it later. Anything
+        # unclaimed in Mealie's calendar was put there by a human.
+        if isinstance(created, dict):
+            _record_owned_entry(created.get("id"), date_str, entry_type)
+        return created
 
     def clear_shopping_list(self, list_id: str):
         """Clear all items from a shopping list using targeted fetch."""
