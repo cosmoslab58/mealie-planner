@@ -349,8 +349,10 @@
         const params = new URLSearchParams(new FormData(e.target));
         showLoading('Curating Menu', 'Initializing agent...');
         const es = new EventSource(`/plan-stream?${params.toString()}`);
+        let progress = 0;
         es.onmessage = (ev) => {
             const d = JSON.parse(ev.data);
+            if (typeof d.progress === 'number') progress = d.progress;
             if (d.status === 'complete') {
                 es.close();
                 if (d.warning) {
@@ -364,10 +366,16 @@
                 document.getElementById('loading-log').innerText = d.status || '';
             }
         };
+        // The server closing the stream can surface as an error even when the run finished
+        // (seen 2026-10-10 on Firefox Android behind the tunnel). Generation runs server-side
+        // and keeps going without this connection, so a drop is never a failed plan by itself.
         es.onerror = () => {
             es.close();
             localStorage.setItem('shopping_list_dirty', 'true');
-            window.location.href = `/?week=${APP.week}&error_msg=Agent Error`;
+            const msg = progress >= 99
+                ? 'success_msg=Menu Ready'
+                : 'error_msg=' + encodeURIComponent('Lost the connection while planning. The plan is still being made; reload in a minute.');
+            window.location.href = `/?week=${APP.week}&${msg}`;
         };
     }
 
