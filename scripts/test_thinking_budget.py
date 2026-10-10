@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 def test_speed():
     api_key = os.getenv('GOOGLE_API_KEY')
-    model = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash')
+    model = os.getenv('GEMINI_MODEL', 'gemini-3.6-flash')
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     # Sample prompt for shopping list sync

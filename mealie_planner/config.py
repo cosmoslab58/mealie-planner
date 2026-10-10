@@ -74,8 +74,8 @@ RECENT_LOOKBACK_DAYS = int(os.getenv('RECENT_LOOKBACK_DAYS', '14'))
 AI_VENDOR = os.getenv("AI_VENDOR", "gemini").lower()  # "gemini" or "openai" or "deepseek"
 
 # Models for each area
-GEMINI_CORE_MODEL = os.getenv("GEMINI_CORE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash"))
-GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash"))
+GEMINI_CORE_MODEL = os.getenv("GEMINI_CORE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
+GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
 
 OPENAI_CORE_MODEL = os.getenv("OPENAI_CORE_MODEL", os.getenv("AI_MODEL_NAME", "gpt-4o-mini"))
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", os.getenv("AI_MODEL_NAME", "gpt-4o"))
