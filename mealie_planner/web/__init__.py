@@ -66,7 +66,7 @@ def create_app(services=None, start_scheduler=None):
     global _scheduler_started
     if start_scheduler and not _scheduler_started:
         from mealie_planner.email_notifier import setup_scheduler
-        setup_scheduler(services.mealie, services.ai)
+        setup_scheduler(services)
         _scheduler_started = True
         logging.getLogger(__name__).info("Background email scheduler started.")
 

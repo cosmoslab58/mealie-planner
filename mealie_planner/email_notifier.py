@@ -403,64 +403,94 @@ def send_daily_reminder_email(date_str=None):
     notifier = EmailNotifier(client, ai)
     return notifier.send_daily_reminder_email(date_str)
 
-def send_saturday_qa_email():
-    from .ai_client import AIClient
-    from .unified_client import UnifiedMealieClient
-    client = UnifiedMealieClient()
-    ai = AIClient()
-    notifier = EmailNotifier(client, ai)
+def auto_generate_weekly_plan(services):
+    """Saturday: plan the next 7 days unattended, unless dinners are already planned.
 
-    # Check if a plan already exists for the active week starting today (Saturday)
-    try:
-        start_str, end_str = get_active_week_strings()
-        plans = client.get_meal_plan(start_str, end_str)
-        dinners = [
-            p for p in plans 
-            if p['entryType'] == 'dinner' 
-            and (p.get('recipeId') or p.get('title') or p.get('text'))
-        ]
-        if dinners:
-            logger.warning(f"[Email] Plan already exists for Saturday ({start_str} to {end_str}). Skipping Saturday Q/A email.")
-            return True
-    except Exception as e:
-        logger.error(f"[Email] Error checking plan existence for Saturday: {e}")
-
-    subject = "📋 Weekly Meal Plan Questionnaire"
-    body = f"""
-    <h2>Hey there!</h2>
-    <p>It's Saturday morning. Please take a moment to fill out the weekly meal plan questionnaire:</p>
-    <p><a href="{APP_URL}" style="display: inline-block; padding: 10px 20px; background-color: #E58325; color: white; text-decoration: none; border-radius: 5px;">Fill out Questionnaire</a></p>
-    <p>Thank you!</p>
+    Uses the same inputs as the planner page with the free-text boxes left empty
+    (freezer items and requests are per-week answers, last week's would be stale),
+    and the low-staples list as currently saved. The generator's report email doubles
+    as Saturday's daily briefing. Returns True when it sent that email.
     """
-    return notifier.send_email(subject, body)
+    from .database import load_state_from_db
 
-def setup_scheduler(mealie_client, ai_client):
-    """Initialize and start the background scheduler for email notifications."""
+    start_str, end_str = get_active_week_strings()
+    try:
+        plans = services.mealie.get_meal_plan(start_str, end_str)
+    except Exception as e:
+        logger.error(f"[AutoPlan] Could not read the meal plan, not generating: {e}")
+        return False
+    if any(p['entryType'] == 'dinner' and (p.get('recipeId') or p.get('title') or p.get('text')) for p in plans):
+        logger.info(f"[AutoPlan] Dinners already planned for {start_str} to {end_str}; skipping.")
+        return False
+
+    lock = services.week_lock()
+    if not lock.acquire(blocking=False):
+        logger.warning("[AutoPlan] A generation is already running; skipping.")
+        return False
+
+    warnings = []
+
+    def progress(msg, pct=None):
+        logger.info(f"[AutoPlan] {pct}% {msg}")
+        if msg.startswith("⚠️"):
+            warnings.append(msg)
+
+    try:
+        services.plan_generator.generate_weekly_plan(
+            start_date_str=start_str,
+            end_date_str=end_str,
+            low_staples_ids=load_state_from_db().get('low_staples', []),
+            progress_callback=progress,
+        )
+    except Exception as e:
+        logger.exception("[AutoPlan] Generation failed")
+        warnings.append(f"⚠️ Generation failed: {e}")
+    finally:
+        lock.release()
+
+    if warnings:
+        services.notifier.send_email(
+            "⚠️ Weekly meal plan needs a look",
+            f"<p>The automatic Saturday plan for {start_str} to {end_str} hit a problem:</p>"
+            f"<p>{'<br>'.join(warnings)}</p>"
+            f"<p><a href=\"{APP_URL}\">Open the planner</a></p>",
+        )
+    return not any(w.startswith("⚠️ Generation failed") or "No changes were made" in w for w in warnings)
+
+
+def setup_scheduler(services):
+    """Initialize and start the background scheduler for plan generation and emails."""
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
-    
+
     scheduler = BackgroundScheduler(timezone=TIMEZONE)
+    autoplanned_on = {}
 
-    # We need closures to capture the notifier instance
+    def saturday_autoplan_job():
+        if auto_generate_weekly_plan(services):
+            autoplanned_on['date'] = datetime.now(ZoneInfo(TIMEZONE)).date()
+
     def daily_reminder_job():
+        # The Saturday report already carries today's briefing; don't send it twice.
+        if autoplanned_on.get('date') == datetime.now(ZoneInfo(TIMEZONE)).date():
+            logger.info("[Email] Plan was generated this morning; its report was today's briefing.")
+            return
         send_daily_reminder_email()
-    
-    def saturday_qa_job():
-        send_saturday_qa_email()
 
-    # 1. Saturday Q/A email at 8:00 AM (only sends if no plan exists)
+    # 1. Saturday 6:00 AM: generate the week unattended (skips if dinners are already planned)
     scheduler.add_job(
-        saturday_qa_job,
-        CronTrigger(day_of_week='sat', hour=8, minute=0, timezone=TIMEZONE),
-        id='saturday_qa_email'
+        saturday_autoplan_job,
+        CronTrigger(day_of_week='sat', hour=6, minute=0, timezone=TIMEZONE),
+        id='saturday_autoplan',
+        misfire_grace_time=3 * 3600,
     )
-    
-    # 2. Daily Reminder email Monday-Sunday at 7:00 AM (on Saturday, only sends if plan exists)
+
+    # 2. Daily briefing email at 7:00 AM
     scheduler.add_job(
         daily_reminder_job,
         CronTrigger(day_of_week='mon-sun', hour=7, minute=0, timezone=TIMEZONE),
         id='daily_reminder_email'
     )
-    
+
     scheduler.start()
     return scheduler
