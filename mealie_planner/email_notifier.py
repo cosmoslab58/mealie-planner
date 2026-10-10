@@ -1,9 +1,12 @@
+import html as html_lib
 import logging
 import os
+import re
 import smtplib
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formatdate, make_msgid
 from zoneinfo import ZoneInfo
 
 from .config import (
@@ -87,12 +90,7 @@ class EmailNotifier:
             logger.info("No recipient emails found. Cannot send email.")
             return False
 
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = f"{from_name} <{from_email}>"
-        msg['To'] = ", ".join(recipients)
-
-        msg.attach(MIMEText(html_content, 'html'))
+        msg = build_message(subject, html_content, from_name, from_email, recipients)
 
         try:
             with smtplib.SMTP(smtp_host, smtp_port) as server:
@@ -386,6 +384,31 @@ Tomorrow's Dinner details:
         except Exception as e:
             logger.error(f"[Email] Failed Saturday report: {e}")
             return False
+
+def html_to_text(html_content):
+    """A readable plain-text twin of the HTML body. HTML-only mail is a spam signal."""
+    text = re.sub(r'(?is)<(script|style|head)\b.*?</\1>', '', html_content)
+    text = re.sub(r'(?i)<br\s*/?>|</(p|div|tr|h[1-6]|li|table)>', '\n', text)
+    text = re.sub(r'(?i)<li\b[^>]*>', '- ', text)
+    text = html_lib.unescape(re.sub(r'<[^>]+>', '', text))
+    lines = [re.sub(r'[ \t\xa0]+', ' ', line).strip() for line in text.splitlines()]
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip() + '\n'
+
+
+def build_message(subject, html_content, from_name, from_email, recipients):
+    """Plain + HTML alternatives with the Date and Message-ID a real mail client sets.
+    Without them Gmail invents both (a '...SMTPIN_ADDED_MISSING@mx.google.com' id), and
+    these mails were landing in Spam despite SPF, DKIM and DMARC all passing (2026-10-10)."""
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = f"{from_name} <{from_email}>"
+    msg['To'] = ", ".join(recipients)
+    msg['Date'] = formatdate(localtime=True)
+    msg['Message-ID'] = make_msgid(domain=(from_email or 'localhost').rpartition('@')[2] or None)
+    msg.attach(MIMEText(html_to_text(html_content), 'plain', 'utf-8'))
+    msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+    return msg
+
 
 def send_email(subject, html_content):
     from .ai_client import AIClient
