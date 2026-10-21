@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 # Non-streaming requests: generous enough for a week plan or a merged shopping list.
 DEFAULT_MAX_TOKENS = 16000
 REQUEST_TIMEOUT_SECONDS = 180
+# Sonnet at medium effort over a full recipe catalogue can take minutes.
+LONG_TIMEOUT_SECONDS = 600
+
+# Models that accept server-side fallbacks="default" (Claude API only); Haiku has none.
+FALLBACK_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1"}
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_RETRIES = 3
 
 _JSON_ONLY_INSTRUCTION = (
@@ -152,6 +158,14 @@ class AIClient:
             raise ConfigurationError(f"Anthropic client could not be configured (set ANTHROPIC_API_KEY): {e}") from e
         self._initialized = True
 
+    def _create(self, kwargs: dict[str, Any]):
+        """messages.create, or the beta endpoint with fallbacks="default" for models that
+        support it: a safety-classifier decline is then rerun on another model in-request."""
+        if kwargs["model"] in FALLBACK_MODELS:
+            client = self.client.with_options(timeout=LONG_TIMEOUT_SECONDS)
+            return client.beta.messages.create(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
+        return self.client.messages.create(**kwargs)
+
     def call(
         self,
         prompt: str,
@@ -160,6 +174,7 @@ class AIClient:
         thinking_budget: Optional[int] = None,
         response_schema=None,
         effort: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
         """Send one prompt and return the response text.
 
@@ -188,7 +203,7 @@ class AIClient:
             system = _JSON_ONLY_INSTRUCTION
 
         kwargs: dict[str, Any] = {
-            "model": self.model_name,
+            "model": model or self.model_name,
             "max_tokens": DEFAULT_MAX_TOKENS,
             "messages": [{"role": "user", "content": prompt}],
             "output_config": output_config,
@@ -198,7 +213,7 @@ class AIClient:
 
         logger.debug("AI prompt: %s", prompt[:500] + "..." if len(prompt) > 500 else prompt)
         try:
-            message = self.client.messages.create(**kwargs)
+            message = self._create(kwargs)
         except anthropic.APIError as e:
             logger.error("Claude API call failed: %s", e)
             raise
@@ -241,7 +256,7 @@ class AIClient:
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = tools
-        message = self.client.messages.create(**kwargs)
+        message = self._create(kwargs)
         if message.stop_reason == "refusal":
             _check_stop_reason(message)
         return message

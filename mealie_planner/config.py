@@ -71,17 +71,22 @@ RECIPE_API_KEY = os.getenv('RECIPE_API_KEY')
 RECENT_LOOKBACK_DAYS = int(os.getenv('RECENT_LOOKBACK_DAYS', '14'))
 
 # --- AI configuration (Anthropic Claude) ---
-# One model for every AI feature. Credentials: ANTHROPIC_API_KEY (read by the SDK).
+# Haiku for the many small calls (parsing, nutrition, shopping, email copy). Sonnet for
+# the two that need real reasoning and run rarely: the weekly plan and the tool-using
+# chat agent. Credentials: ANTHROPIC_API_KEY (read by the SDK).
 AI_MODEL = os.getenv("AI_MODEL", "claude-haiku-5-5")
+PLAN_MODEL = os.getenv("AI_PLAN_MODEL", "claude-sonnet-5-5")
+CHAT_MODEL = os.getenv("AI_CHAT_MODEL", "claude-sonnet-5-5")
+PLAN_EFFORT = os.getenv("AI_PLAN_EFFORT", "medium")
 # Thinking depth (output_config.effort): low | medium | high | xhigh | max.
 # Core one-shot calls ran with Gemini thinking off (budget 0), hence "low";
 # the tool-using chat agent ran with Gemini's default dynamic thinking, hence "medium".
 CORE_EFFORT = os.getenv("AI_CORE_EFFORT", "low")
 CHAT_EFFORT = os.getenv("AI_CHAT_EFFORT", "medium")
 
-# Back-compat names (same single model).
+# Back-compat names.
 ACTIVE_CORE_MODEL = AI_MODEL
-ACTIVE_CHAT_MODEL = AI_MODEL
+ACTIVE_CHAT_MODEL = CHAT_MODEL
 
 raw_emails = os.getenv('FAMILY_RECIPIENT_EMAILS', _METADATA.get('recipient_emails', 'nathan@example.com,kristin@example.com'))
 FAMILY_RECIPIENT_EMAILS = [email.strip() for email in raw_emails.split(',')]

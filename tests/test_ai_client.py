@@ -36,6 +36,10 @@ def client(monkeypatch):
     AIClient._instance = None
     c = AIClient()
     c.client = MagicMock()
+    # Sonnet calls go through with_options(...).beta.messages; point both at the
+    # same mock so every test can read one call log.
+    c.client.with_options.return_value = c.client
+    c.client.beta.messages = c.client.messages
     yield c
     AIClient._instance = None
 
@@ -225,3 +229,13 @@ def test_chat_tool_exception_becomes_error_result(client, monkeypatch):
 
 def test_module_has_no_gemini_leftovers():
     assert not hasattr(ai_mod, "requests")
+
+
+
+def test_sonnet_calls_use_the_beta_endpoint_with_default_fallbacks(client):
+    client.client.messages.create.return_value = message([text_block("ok")])
+    client.call("hi", expect_json=False)
+    assert "fallbacks" not in sent_kwargs(client) and sent_kwargs(client)["model"] == "claude-haiku-5-5"
+    client.call("hi", expect_json=False, model="claude-sonnet-5-5", effort="medium")
+    assert sent_kwargs(client)["fallbacks"] == "default"
+    assert sent_kwargs(client)["betas"] == ["server-side-fallback-2026-07-01"]

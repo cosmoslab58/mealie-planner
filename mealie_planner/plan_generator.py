@@ -8,6 +8,8 @@ from .config import (
     _WEEKLY_MEAL_SELECTION_SKILL_DEFINITION,
     ACTIVE_LIST_ID,
     FAMILY_DIETARY_RULES_PROMPT,
+    PLAN_EFFORT,
+    PLAN_MODEL,
     RECENT_LOOKBACK_DAYS,
     get_banned_recipes,
 )
@@ -310,7 +312,8 @@ class PlanGenerator:
         
         meals = []
         try:
-            raw = self.ai.call(selection_prompt, response_schema=WeeklyMealPlanResponse, temperature=0.7)
+            raw = self.ai.call(selection_prompt, response_schema=WeeklyMealPlanResponse,
+                               model=PLAN_MODEL, effort=PLAN_EFFORT)
             ai_result = WeeklyMealPlanResponse.model_validate_json(raw).model_dump()
             
             for day_entry in ai_result.get("days", []):
