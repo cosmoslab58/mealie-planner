@@ -1,39 +1,127 @@
+"""Anthropic Claude client used by every AI feature in the app.
+
+One model everywhere (``AI_MODEL``, default ``claude-haiku-5-5``). Two entry points:
+
+* ``call()``: single-prompt text or JSON completion (plan generation, parsing,
+  nutrition imputation, email copy, categorisation, ...).
+* ``generate()``: multi-turn Messages API call with tools, used by the MCP chat agent.
+
+Credentials come from ``ANTHROPIC_API_KEY`` (read by the SDK itself).
+"""
+import copy
 import json
 import logging
-import os
-from typing import Optional
+import re
+from typing import Any, Optional
 
-import requests
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+import anthropic
+
+from .exceptions import AIResponseError, ConfigurationError
 
 logger = logging.getLogger(__name__)
 
-def is_ai_retryable_exception(exception):
-    """Determine if an AI API call failure is transient and should be retried."""
-    if isinstance(exception, requests.exceptions.RequestException):
-        if exception.response is not None:
-            return exception.response.status_code in (429, 500, 502, 503, 504)
-        return True
-    
-    try:
-        import openai
-        if isinstance(exception, openai.APIError):
-            status_code = getattr(exception, "status_code", None)
-            if status_code is not None:
-                return status_code in (429, 500, 502, 503, 504)
-            return True
-    except ImportError:
-        pass
-        
-    return False
+# Non-streaming requests: generous enough for a week plan or a merged shopping list.
+DEFAULT_MAX_TOKENS = 16000
+REQUEST_TIMEOUT_SECONDS = 180
+MAX_RETRIES = 3
+
+_JSON_ONLY_INSTRUCTION = (
+    "Respond with a single valid JSON value only: no prose, no explanations, no markdown code fences."
+)
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
+
+
+def effort_from_thinking_budget(thinking_budget: Optional[int]) -> str:
+    """Map a legacy Gemini ``thinkingBudget`` (tokens; 0 = thinking off) to a Claude effort level.
+
+    Claude Haiku 5.5 always thinks adaptively and rejects fixed token budgets, so
+    ``output_config.effort`` is the only depth control.
+    """
+    if not thinking_budget or thinking_budget <= 0:
+        return "low"
+    if thinking_budget <= 4096:
+        return "medium"
+    return "high"
+
+
+def _strip_code_fences(text: str) -> str:
+    match = _FENCE_RE.match(text)
+    return match.group(1).strip() if match else text.strip()
+
+
+def _schema_dict(response_schema) -> dict:
+    if hasattr(response_schema, "model_json_schema"):
+        return response_schema.model_json_schema()
+    if isinstance(response_schema, dict):
+        return copy.deepcopy(response_schema)
+    raise TypeError(f"Unsupported response_schema: {response_schema!r}")
+
+
+def _expand_enum_keyed_dicts(node):
+    """Turn ``Dict[Literal[...], X]`` schemas into objects with explicit optional properties.
+
+    Pydantic emits these as ``propertyNames: {enum}`` + ``additionalProperties: X``,
+    which structured outputs cannot express (it forces ``additionalProperties: false``).
+    Listing each allowed key as an optional property keeps the same JSON shape.
+    """
+    if isinstance(node, list):
+        return [_expand_enum_keyed_dicts(n) for n in node]
+    if not isinstance(node, dict):
+        return node
+    node = {k: _expand_enum_keyed_dicts(v) for k, v in node.items()}
+    names = node.get("propertyNames")
+    extra = node.get("additionalProperties")
+    if (
+        node.get("type") == "object"
+        and isinstance(names, dict)
+        and isinstance(names.get("enum"), list)
+        and isinstance(extra, dict)
+    ):
+        node.pop("propertyNames")
+        node.pop("additionalProperties")
+        props = node.setdefault("properties", {})
+        for key in names["enum"]:
+            props.setdefault(key, copy.deepcopy(extra))
+    return node
+
+
+def build_output_schema(response_schema) -> tuple[dict, bool]:
+    """Build a structured-outputs JSON schema from a Pydantic model or dict.
+
+    Returns ``(schema, wrapped)``. Non-object roots (e.g. ``RootModel[List[...]]``)
+    are wrapped as ``{"result": <root>}`` so the request always has an object root;
+    ``wrapped`` tells the caller to unwrap the response.
+    """
+    schema = _expand_enum_keyed_dicts(_schema_dict(response_schema))
+    wrapped = schema.get("type") != "object"
+    if wrapped:
+        defs = schema.pop("$defs", None)
+        schema = {
+            "type": "object",
+            "properties": {"result": schema},
+            "required": ["result"],
+        }
+        if defs is not None:
+            schema["$defs"] = defs
+    return anthropic.transform_schema(schema), wrapped
+
+
+def _response_text(message) -> str:
+    return "".join(block.text for block in message.content if block.type == "text")
+
+
+def _check_stop_reason(message) -> None:
+    if message.stop_reason == "refusal":
+        details = getattr(message, "stop_details", None)
+        category = getattr(details, "category", None) if details else None
+        raise AIResponseError(f"Claude declined the request (refusal, category={category}).")
+    if message.stop_reason == "max_tokens":
+        raise AIResponseError("Claude response was truncated at max_tokens.")
 
 
 class AIClient:
-    """Unified AI Client supporting both Google Gemini and OpenAI/DeepSeek backends.
-
-    Configuration can be switched easily via the AI_VENDOR environment variable
-    or the centralized config file.
-    """
+    """Process-wide Claude client (singleton, like the Mealie client)."""
 
     _instance = None
 
@@ -44,228 +132,116 @@ class AIClient:
         return cls._instance
 
     def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
-        # Allow re-initialization if api_key or model_name is explicitly passed,
-        # otherwise use singleton check.
         if self._initialized and api_key is None and model_name is None:
             return
 
-        from .config import ACTIVE_CORE_MODEL, AI_VENDOR
-        self.vendor = AI_VENDOR
+        from .config import AI_MODEL, CHAT_EFFORT, CORE_EFFORT
 
-        if self.vendor == "gemini":
-            self.api_key = api_key or os.getenv('GOOGLE_API_KEY')
-            self.model_name = model_name or os.getenv('GEMINI_MODEL', ACTIVE_CORE_MODEL)
-            if not self.api_key:
-                from .exceptions import ConfigurationError
-                raise ConfigurationError("GOOGLE_API_KEY is not set in environment.")
-            self.session = requests.Session()
-        else:
-            self.api_key = (
-                api_key
-                or os.getenv("AI_API_KEY")
-                or os.getenv("DEEPSEEK_API_KEY")
+        self.model_name = model_name or AI_MODEL
+        self.core_effort = CORE_EFFORT
+        self.chat_effort = CHAT_EFFORT
+        try:
+            # api_key=None lets the SDK resolve ANTHROPIC_API_KEY (or another
+            # configured credential source) from the environment.
+            self.client = anthropic.Anthropic(
+                api_key=api_key,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                max_retries=MAX_RETRIES,
             )
-            if not self.api_key:
-                raise ValueError(
-                    "AI API key not provided. Set AI_API_KEY (or DEEPSEEK_API_KEY) environment variable."
-                )
-            self.base_url = os.getenv("AI_BASE_URL", "https://api.deepseek.com")
-            self.model_name = (
-                model_name
-                or os.getenv("AI_MODEL_NAME", ACTIVE_CORE_MODEL)
-            )
-            from openai import OpenAI
-            self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
-
+        except anthropic.AnthropicError as e:
+            raise ConfigurationError(f"Anthropic client could not be configured (set ANTHROPIC_API_KEY): {e}") from e
         self._initialized = True
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception(is_ai_retryable_exception),
-        reraise=True
-    )
     def call(
         self,
         prompt: str,
         expect_json: bool = True,
-        temperature: float = 0.2,
-        thinking_budget: int = 0,
+        temperature: Optional[float] = None,
+        thinking_budget: Optional[int] = None,
         response_schema=None,
+        effort: Optional[str] = None,
     ) -> str:
+        """Send one prompt and return the response text.
+
+        * ``response_schema`` (Pydantic model or JSON schema dict): the reply is
+          constrained by structured outputs and returned as a JSON string that
+          validates against the original schema.
+        * ``expect_json`` without a schema: the model is told to answer with bare
+          JSON; code fences are stripped defensively.
+        * ``temperature`` is accepted for call-site compatibility but not sent:
+          Claude Haiku 5.5 rejects non-default sampling parameters.
+        * ``thinking_budget`` (legacy Gemini knob) maps onto ``effort`` when
+          ``effort`` is not given; with neither, ``CORE_EFFORT`` applies.
         """
-        Call the active AI API and return the response text.
-        """
-        if self.vendor == "gemini":
-            # --- GEMINI BACKEND ---
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
+        if temperature is not None:
+            logger.debug("temperature=%s ignored (not supported by %s)", temperature, self.model_name)
+        if effort is None:
+            effort = effort_from_thinking_budget(thinking_budget) if thinking_budget is not None else self.core_effort
 
-            generation_config = {
-                "temperature": temperature,
-                "responseMimeType": "application/json" if (expect_json or response_schema) else "text/plain",
-                "thinkingConfig": {
-                    "thinkingBudget": thinking_budget
-                }
-            }
+        output_config: dict[str, Any] = {"effort": effort}
+        wrapped = False
+        system = None
+        if response_schema is not None:
+            schema, wrapped = build_output_schema(response_schema)
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+        elif expect_json:
+            system = _JSON_ONLY_INSTRUCTION
 
-            if response_schema:
-                from pydantic import BaseModel
-                # If response_schema is a Pydantic model class
-                if isinstance(response_schema, type) and issubclass(response_schema, BaseModel):
-                    generation_config["responseJsonSchema"] = response_schema.model_json_schema()
-                elif hasattr(response_schema, "model_json_schema"):
-                    generation_config["responseJsonSchema"] = response_schema.model_json_schema()
-                else:
-                    generation_config["responseJsonSchema"] = response_schema
+        kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "max_tokens": DEFAULT_MAX_TOKENS,
+            "messages": [{"role": "user", "content": prompt}],
+            "output_config": output_config,
+        }
+        if system:
+            kwargs["system"] = system
 
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": generation_config
-            }
+        logger.debug("AI prompt: %s", prompt[:500] + "..." if len(prompt) > 500 else prompt)
+        try:
+            message = self.client.messages.create(**kwargs)
+        except anthropic.APIError as e:
+            logger.error("Claude API call failed: %s", e)
+            raise
+        logger.debug("AI response id: %s (stop_reason=%s)", message.id, message.stop_reason)
+        _check_stop_reason(message)
 
-            logger.debug("AI prompt (Gemini): %s", prompt[:500] + "..." if len(prompt) > 500 else prompt)
+        text = _response_text(message)
+        if response_schema is not None:
+            if wrapped:
+                return json.dumps(json.loads(text)["result"])
+            return text
+        if expect_json:
+            return _strip_code_fences(text)
+        return text
 
-            try:
-                resp = self.session.post(url, json=payload, timeout=180)
-                resp.raise_for_status()
-                data = resp.json()
-                logger.debug("AI response id: %s", data.get('responseId'))
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except requests.exceptions.RequestException as e:
-                logger.error("Gemini API call failed: %s", e)
-                raise
-
-        else:
-            # --- OPENAI/DEEPSEEK BACKEND ---
-            if thinking_budget is not None and thinking_budget > 0:
-                logger.warning("thinking_budget is not supported by all vendors; ignoring it.")
-
-            # If a schema is provided, add it to the prompt as guidance.
-            if response_schema is not None:
-                try:
-                    # Pydantic v2 model
-                    schema = response_schema.model_json_schema()
-                except AttributeError:
-                    # assume it's already a dict
-                    schema = response_schema
-                schema_text = json.dumps(schema, indent=2)
-                prompt = (
-                    prompt
-                    + "\n\n---\nYou MUST output a single JSON object that strictly follows this JSON schema:\n"
-                    + schema_text
-                )
-
-            kwargs = {
-                "model": self.model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-            }
-
-            if expect_json:
-                kwargs["response_format"] = {"type": "json_object"}
-
-            response = self.client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception(is_ai_retryable_exception),
-        reraise=True
-    )
     def generate(
         self,
-        contents: list,
-        system_instruction: Optional[str] = None,
+        messages: list,
+        system: Optional[str] = None,
         tools: Optional[list] = None,
-        temperature: Optional[float] = None,
         model: Optional[str] = None,
-        timeout: int = 90,
-    ) -> dict:
+        effort: Optional[str] = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ):
+        """Multi-turn Messages API call (tool use allowed). Returns the SDK ``Message``.
+
+        ``messages`` and ``tools`` are in Anthropic format; the caller owns the
+        tool loop (see ``mcp_agent.run_chat_turn``).
         """
-        Lower-level generateContent call exposing multi-turn `contents`, system_instruction,
-        and tool/function-calling, supporting both Gemini and OpenAI backends.
-        """
-        active_model = model or self.model_name
-
-        if self.vendor == "gemini":
-            # --- GEMINI BACKEND ---
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={self.api_key}"
-
-            payload = {"contents": contents}
-            if system_instruction:
-                payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-            if tools:
-                payload["tools"] = tools
-            
-            # Build generation config if needed
-            generation_config = {}
-            if temperature is not None:
-                generation_config["temperature"] = temperature
-            if generation_config:
-                payload["generationConfig"] = generation_config
-
-            resp = self.session.post(url, json=payload, timeout=timeout)
-            resp.raise_for_status()
-            return resp.json()
-
-        else:
-            # --- OPENAI/DEEPSEEK BACKEND ---
-            # Convert Gemini‑style tools to OpenAI format
-            openai_tools = None
-            if tools:
-                openai_tools = []
-                for tool in tools:
-                    for decl in tool.get("functionDeclarations", []):
-                        openai_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": decl["name"],
-                                "description": decl.get("description", ""),
-                                "parameters": decl.get("parameters", {}),
-                            }
-                        })
-
-            messages = [{"role": "system", "content": system_instruction}] if system_instruction else []
-            for item in contents:
-                role = item.get("role", "user")
-                # Handle both 'model' and 'assistant' roles
-                if role == "model":
-                    role = "assistant"
-                parts = item.get("parts", [])
-                text = "".join(p.get("text", "") for p in parts if "text" in p)
-                messages.append({"role": role, "content": text})
-
-            # Fire the request (may use tools)
-            kwargs = {
-                "model": active_model,
-                "messages": messages,
-                "tools": openai_tools,
-                "tool_choice": "auto" if openai_tools else None,
-            }
-            if temperature is not None:
-                kwargs["temperature"] = temperature
-
-            response = self.client.chat.completions.create(**kwargs)
-
-            choice = response.choices[0]
-            msg = choice.message
-
-            # Build Gemini‑like response structure
-            parts = []
-            if msg.content:
-                parts.append({"text": msg.content})
-            if msg.tool_calls:
-                for tc in msg.tool_calls:
-                    parts.append({
-                        "functionCall": {
-                            "name": tc.function.name,
-                            "args": json.loads(tc.function.arguments) if tc.function.arguments else {},
-                        }
-                    })
-
-            return {
-                "candidates": [
-                    {"content": {"parts": parts}}
-                ]
-            }
+        kwargs: dict[str, Any] = {
+            "model": model or self.model_name,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "output_config": {"effort": effort or self.chat_effort},
+            # The tool loop resends the same tools + system + growing history on
+            # every iteration; auto-caching the last block makes those re-reads cheap.
+            "cache_control": {"type": "ephemeral"},
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = tools
+        message = self.client.messages.create(**kwargs)
+        if message.stop_reason == "refusal":
+            _check_stop_reason(message)
+        return message

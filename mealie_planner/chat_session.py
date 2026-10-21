@@ -57,7 +57,7 @@ class _ChatSessionManager:
         from mcp import ClientSession
         from mcp.client.stdio import stdio_client
 
-        from .mcp_agent import build_gemini_tools, get_server_params
+        from .mcp_agent import build_claude_tools, get_server_params
 
         self._stack = AsyncExitStack()
         try:
@@ -68,9 +68,8 @@ class _ChatSessionManager:
                 ClientSession(read_stream, write_stream)
             )
             await self._session.initialize()
-            self._tools = build_gemini_tools(await self._session.list_tools())
-            tool_count = len(self._tools[0]["functionDeclarations"]) if self._tools else 0
-            logger.info("Persistent MCP chat session started (%d tools).", tool_count)
+            self._tools = build_claude_tools(await self._session.list_tools())
+            logger.info("Persistent MCP chat session started (%d tools).", len(self._tools))
         except BaseException:
             await self._close()
             raise

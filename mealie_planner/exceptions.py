@@ -16,3 +16,7 @@ class SkillParsingError(MealiePlannerError):
 class ConfigurationError(MealiePlannerError):
     """Exception raised for missing or invalid configuration."""
     pass
+
+class AIResponseError(MealiePlannerError):
+    """Exception raised when the AI returns an unusable response (refusal, truncation)."""
+    pass

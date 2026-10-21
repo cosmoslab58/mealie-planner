@@ -57,9 +57,9 @@ class CompiledShoppingItem(BaseModel):
 class CompiledShoppingList(RootModel[List[CompiledShoppingItem]]):
     pass
 
-# Gemini-compatible wrapper: Gemini's structured output does not reliably enforce
-# bare JSON-array root schemas produced by RootModel.  Wrapping in a plain object
-# with an `items` field produces a schema Gemini honours consistently.
+# Object wrapper for the compiled list (an object root with an `items` field).
+# AIClient also wraps bare-array RootModel schemas itself, but this shape is what
+# shopping_sync parses, so it stays.
 class CompiledShoppingListWrapper(BaseModel):
     items: List[CompiledShoppingItem]
 

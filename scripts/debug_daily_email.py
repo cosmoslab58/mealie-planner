@@ -10,15 +10,15 @@ load_dotenv()
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from mealie_planner.ai_client import AIClient
 from mealie_planner.email_notifier import EmailNotifier
-from mealie_planner.gemini_client import GeminiClient
 from mealie_planner.unified_client import UnifiedMealieClient
 
 
 def generate_debug_email(date_str):
     client = UnifiedMealieClient()
-    gemini = GeminiClient()
-    notifier = EmailNotifier(client, gemini)
+    ai = AIClient()
+    notifier = EmailNotifier(client, ai)
     
     # 1. Fetch meal plans for today and tomorrow
     from datetime import timedelta
@@ -81,7 +81,7 @@ def generate_debug_email(date_str):
         "Sunday", bf, ln, dn_title, parsed_recipe_info, ai_prep_note,
         tomorrow_title, parsed_tomorrow_recipe_info, tomorrow_prep_note
     )
-    print(f"Gemini Response:\n{ai_summary}\n")
+    print(f"AI Response:\n{ai_summary}\n")
     
     # 3. Nutrition for today
     daily_nutrition, _ = notifier.nutrition.calculate_nutrition_for_range(date_str, date_str)

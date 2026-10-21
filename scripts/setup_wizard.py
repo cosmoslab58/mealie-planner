@@ -129,18 +129,8 @@ def configure_env(auto=False):
         env_vars["MEALIE_ACTIVE_LIST_ID"] = prompt_val("Mealie Active Shopping List UUID", env_vars.get("MEALIE_ACTIVE_LIST_ID", ""))
         env_vars["MEALIE_STAPLES_LIST_ID"] = prompt_val("Mealie Staples Shopping List UUID", env_vars.get("MEALIE_STAPLES_LIST_ID", ""))
         
-        # AI Vendor
-        vendor = prompt_val("AI Vendor (gemini / openai / deepseek)", env_vars.get("AI_VENDOR", "gemini")).lower()
-        if vendor not in ["gemini", "openai", "deepseek"]:
-            print_warning(f"Invalid vendor '{vendor}'. Defaulting to 'gemini'.")
-            vendor = "gemini"
-        env_vars["AI_VENDOR"] = vendor
-
-        if vendor == "gemini":
-            env_vars["GOOGLE_API_KEY"] = prompt_val("Google API Key (Gemini)", env_vars.get("GOOGLE_API_KEY", ""))
-        else:
-            env_vars["AI_API_KEY"] = prompt_val("AI Provider API Key", env_vars.get("AI_API_KEY", ""))
-            env_vars["AI_BASE_URL"] = prompt_val("AI API Base URL", env_vars.get("AI_BASE_URL", "https://api.openai.com/v1" if vendor == "openai" else "https://api.deepseek.com"))
+        # AI (Anthropic Claude)
+        env_vars["ANTHROPIC_API_KEY"] = prompt_val("Anthropic API Key", env_vars.get("ANTHROPIC_API_KEY", ""))
 
         # Household
         env_vars["FAMILY_NAMES"] = prompt_val("Family Names (e.g. 'John & Jane')", env_vars.get("FAMILY_NAMES", "Nathan & Kristin"))

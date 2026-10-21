@@ -75,9 +75,8 @@ def migrate_to_zones():
 
 Return a JSON object where keys are food names and values are the EXACT zone name string."""
 
-        from mealie_planner.gemini_client import GeminiClient
-        gemini = GeminiClient()
-        ai_resp = gemini.call(prompt, expect_json=True)
+        from mealie_planner.ai_client import AIClient
+        ai_resp = AIClient().call(prompt, expect_json=True)
         try:
             mapping = json.loads(ai_resp)
         except:

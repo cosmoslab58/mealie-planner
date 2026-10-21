@@ -151,7 +151,7 @@ def create_recipe_from_url(url: str) -> Dict[str, Any]:
                     raw_ingredients.append(text)
             
             if raw_ingredients:
-                # Use Gemini to clean and standardize the lines
+                # Use the AI to clean and standardize the lines
                 clean_lines = mealie.standardize_ingredients_with_ai(raw_ingredients)
                 
                 # Use Mealie's NLP parser to structure the clean lines

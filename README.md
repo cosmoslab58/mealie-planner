@@ -92,7 +92,7 @@ Templates for these files are provided in the repository root and are copied aut
 
 * **Backend:** Python 3.12, Flask (app factory + blueprints), APScheduler, served by gunicorn in Docker
 * **Frontend:** Vanilla JS + CSS design tokens (`static/js/app.js`, `static/css/app.css`), Jinja partials in `templates/partials/`
-* **AI Engine:** Google Gemini, OpenAI, or DeepSeek API (configurable via `.env`)
+* **AI Engine:** Anthropic Claude (`claude-haiku-5-5` for every feature) via the official `anthropic` SDK; set `ANTHROPIC_API_KEY` in `.env`
 * **MCP Integration:** [mealie-mcp-server](https://github.com/rldiao/mealie-mcp-server) via a persistent chat session
 
 ### Code layout

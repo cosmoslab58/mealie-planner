@@ -316,24 +316,23 @@ class UnifiedMealieClient(MealieFetcher):
             return [{"note": i} for i in ingredients]
 
     def parse_ingredients_with_ai(self, raw_text: str) -> List[Dict[str, Any]]:
-        """Parse free-text ingredients using the unified GeminiClient and config definitions."""
-        from .gemini_client import GeminiClient
+        """Parse free-text ingredients using the shared AIClient and config definitions."""
+        from .ai_client import AIClient
         from .parsers import parse_freezer_items
-        
-        gemini = GeminiClient()
-        return parse_freezer_items(gemini, raw_text)
+
+        return parse_freezer_items(AIClient(), raw_text)
 
     def standardize_ingredients_with_ai(self, ingredients: List[str]) -> List[str]:
         """
-        Use GeminiClient to clean and standardize a list of ingredient strings.
+        Use the AI client to clean and standardize a list of ingredient strings.
         Removes brand names, extraneous instructions, and formatting noise.
         """
-        from .gemini_client import GeminiClient
-        gemini = GeminiClient()
-        
+        from .ai_client import AIClient
+        ai = AIClient()
+
         try:
             raw_text = "\n".join(ingredients)
-            logger.info({"message": "Standardizing ingredients via Gemini AI", "count": len(ingredients)})
+            logger.info({"message": "Standardizing ingredients via AI", "count": len(ingredients)})
             
             prompt = (
                 "You are an expert in the 'Ingredient Standardization Skill'.\n\n" +
@@ -343,7 +342,7 @@ class UnifiedMealieClient(MealieFetcher):
                 "Return ONLY a JSON array of strings."
             )
 
-            ai_response = gemini.call(prompt, response_schema=StandardizedIngredients)
+            ai_response = ai.call(prompt, response_schema=StandardizedIngredients)
             return StandardizedIngredients.model_validate_json(ai_response).root
         except Exception as e:
             logger.error(f"Error standardizing ingredients with AI: {e}")

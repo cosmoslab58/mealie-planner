@@ -12,8 +12,8 @@ sys.path.insert(0, '/app')
 import json
 
 from mealie_planner import config
+from mealie_planner.ai_client import AIClient
 from mealie_planner.email_notifier import send_email
-from mealie_planner.gemini_client import GeminiClient, call_gemini
 from mealie_planner.parsers import parse_exclusions
 from mealie_planner.unified_client import UnifiedMealieClient
 
@@ -24,7 +24,7 @@ def run_substep_profile():
     print("====================================================\n")
 
     client = UnifiedMealieClient()
-    gemini = GeminiClient()
+    ai = AIClient()
     
     # 1. Exclusion Parsing AI Call
     print("[1] Profiling Exclusion Parsing AI Call...")
@@ -99,7 +99,7 @@ def run_substep_profile():
     )
     
     t0 = time.perf_counter()
-    raw = call_gemini(selection_prompt, expect_json=True, temperature=0.7)
+    raw = ai.call(selection_prompt, expect_json=True, temperature=0.7)
     selected = json.loads(raw)
     t_select = time.perf_counter() - t0
     print(f"    Selected IDs: {selected.get('dinner_ids')}")
@@ -209,7 +209,7 @@ def run_substep_profile():
         f"Input Data: {json.dumps(payload)}\n\n" +
         "Return ONLY the JSON array of objects as specified in the skill definition."
     )
-    ai_response = call_gemini(prompt, expect_json=True)
+    ai_response = ai.call(prompt, expect_json=True)
     ai_output = json.loads(ai_response)
     t_sync_llm = time.perf_counter() - t_llm_start
     

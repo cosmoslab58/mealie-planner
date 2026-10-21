@@ -32,4 +32,3 @@ Ad-hoc investigation scripts; not part of normal operation and may be stale.
 | `profile_substeps.py` | Time individual plan-generation substeps. |
 | `test_breakfasts.py` | Probe breakfast selection behavior. |
 | `test_sqlite_locking.py` | Reproduce Mealie SQLite locking under concurrent fetches. |
-| `test_thinking_budget.py` | Experiment with Gemini `thinkingBudget` values. |

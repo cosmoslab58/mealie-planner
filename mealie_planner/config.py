@@ -70,23 +70,18 @@ MEALIE_FRONTEND_URL = os.getenv('MEALIE_FRONTEND_URL', 'https://your-mealie-doma
 RECIPE_API_KEY = os.getenv('RECIPE_API_KEY')
 RECENT_LOOKBACK_DAYS = int(os.getenv('RECENT_LOOKBACK_DAYS', '14'))
 
-# --- AI Vendor and Models Configuration ---
-AI_VENDOR = os.getenv("AI_VENDOR", "gemini").lower()  # "gemini" or "openai" or "deepseek"
+# --- AI configuration (Anthropic Claude) ---
+# One model for every AI feature. Credentials: ANTHROPIC_API_KEY (read by the SDK).
+AI_MODEL = os.getenv("AI_MODEL", "claude-haiku-5-5")
+# Thinking depth (output_config.effort): low | medium | high | xhigh | max.
+# Core one-shot calls ran with Gemini thinking off (budget 0), hence "low";
+# the tool-using chat agent ran with Gemini's default dynamic thinking, hence "medium".
+CORE_EFFORT = os.getenv("AI_CORE_EFFORT", "low")
+CHAT_EFFORT = os.getenv("AI_CHAT_EFFORT", "medium")
 
-# Models for each area
-GEMINI_CORE_MODEL = os.getenv("GEMINI_CORE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
-GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash"))
-
-OPENAI_CORE_MODEL = os.getenv("OPENAI_CORE_MODEL", os.getenv("AI_MODEL_NAME", "gpt-4o-mini"))
-OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", os.getenv("AI_MODEL_NAME", "gpt-4o"))
-
-# Resolve active models based on AI_VENDOR
-if AI_VENDOR == "gemini":
-    ACTIVE_CORE_MODEL = GEMINI_CORE_MODEL
-    ACTIVE_CHAT_MODEL = GEMINI_CHAT_MODEL
-else:
-    ACTIVE_CORE_MODEL = OPENAI_CORE_MODEL
-    ACTIVE_CHAT_MODEL = OPENAI_CHAT_MODEL
+# Back-compat names (same single model).
+ACTIVE_CORE_MODEL = AI_MODEL
+ACTIVE_CHAT_MODEL = AI_MODEL
 
 raw_emails = os.getenv('FAMILY_RECIPIENT_EMAILS', _METADATA.get('recipient_emails', 'nathan@example.com,kristin@example.com'))
 FAMILY_RECIPIENT_EMAILS = [email.strip() for email in raw_emails.split(',')]

@@ -91,7 +91,7 @@ def _add_item_to_list(list_id: str, item_type: str):
                     f"{json.dumps(label_names)}\n\n"
                     "Reply with ONLY the exact category name from the list, nothing else."
                 )
-                category = services.ai.call(prompt).strip()
+                category = services.ai.call(prompt, expect_json=False).strip()
                 category_clean = re.sub(r'["\']', '', category).strip().lower()
                 matched_label = next(
                     (label for label in labels if label['name'].lower().strip() == category_clean), None

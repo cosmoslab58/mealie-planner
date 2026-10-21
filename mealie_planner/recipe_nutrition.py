@@ -131,7 +131,7 @@ class RecipeNutrition:
                 if api_data:
                     return api_data
 
-        # 2. Fallback to Gemini/DeepSeek AI Imputation
+        # 2. Fallback to AI imputation
         ingredients = extract_ingredient_texts(recipe_details)
         servings = recipe_details.get('recipeServings') or recipe_details.get('recipeYield') or '4'
         description = recipe_details.get('description') or ''
