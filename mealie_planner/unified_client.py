@@ -21,8 +21,9 @@ if mcp_src_dir not in sys.path:
 from mealie import MealieFetcher
 
 logger = logging.getLogger("mealie-planner-unified")
-from .config import _INGREDIENT_STANDARDIZATION_SKILL_DEFINITION
+from .config import _INGREDIENT_STANDARDIZATION_SKILL_DEFINITION, STAPLES_LIST_ID
 from .models import StandardizedIngredients
+from .radicale_list import RadicaleList, is_dav_id
 
 _recipe_details_cache = {}
 # Per-key fetch timestamps so cached recipe details can expire (see RECIPE_CACHE_TTL).
@@ -91,7 +92,13 @@ class UnifiedMealieClient(MealieFetcher):
         super().__init__(base_url=base_url, api_key=api_key)
         self._recipe_details_cache = _recipe_details_cache
         self._recipe_details_cache_ts = _recipe_details_cache_ts
+        # The active shopping list lives on Radicale when SHOPPING_CALDAV_URL is set
+        # (radicale_list.py); staples stay a Mealie list either way.
+        self.dav_list = RadicaleList.from_env(self.get_labels)
         self._initialized = True
+
+    def _on_dav(self, list_id: Optional[str]) -> bool:
+        return self.dav_list is not None and list_id != STAPLES_LIST_ID
 
     @retry(
         stop=stop_after_attempt(3),
@@ -230,8 +237,54 @@ class UnifiedMealieClient(MealieFetcher):
             _record_owned_entry(created.get("id"), date_str, entry_type)
         return created
 
+    # --- Shopping list: Radicale for the active list, Mealie for staples ---
+    # Every shopping-list write in the app comes through these, so the routes and the sync
+    # never need to know where the list lives. A Radicale item's id starts with "dav-".
+
+    def create_shopping_list_items_bulk(self, items: List[Dict[str, Any]]):
+        dav = [i for i in items if self._on_dav(i.get("shoppingListId"))]
+        rest = [i for i in items if not self._on_dav(i.get("shoppingListId"))]
+        out = self.dav_list.add(dav) if dav else []
+        if rest:
+            super().create_shopping_list_items_bulk(rest)
+        return out
+
+    def create_shopping_list_item(self, shopping_list_id: str, note: str, label_id: Optional[str] = None, **kw):
+        if self._on_dav(shopping_list_id):
+            return self.dav_list.add([{"note": note, "labelId": label_id, "quantity": kw.get("quantity", 0)}])[0]
+        return super().create_shopping_list_item(shopping_list_id=shopping_list_id, note=note, label_id=label_id, **kw)
+
+    def update_shopping_list_items_bulk(self, items: List[Dict[str, Any]]):
+        dav = [i for i in items if is_dav_id(i.get("id", ""))]
+        rest = [i for i in items if not is_dav_id(i.get("id", ""))]
+        if dav:
+            self.dav_list.update(dav)
+        return super().update_shopping_list_items_bulk(rest) if rest else {"updated": len(dav)}
+
+    def update_shopping_list_item(self, item_id: str, item_data: Dict[str, Any]):
+        if is_dav_id(item_id):
+            self.dav_list.update([{**item_data, "id": item_id}])
+            return item_data
+        return super().update_shopping_list_item(item_id, item_data)
+
+    def delete_shopping_list_items_bulk(self, item_ids: List[str]):
+        dav = [i for i in item_ids if is_dav_id(i)]
+        rest = [i for i in item_ids if not is_dav_id(i)]
+        if dav:
+            self.dav_list.delete(dav)
+        return super().delete_shopping_list_items_bulk(rest) if rest else {"deleted": len(dav)}
+
+    def delete_shopping_list_item(self, item_id: str):
+        if is_dav_id(item_id):
+            self.dav_list.delete([item_id])
+            return {"deleted": 1}
+        return super().delete_shopping_list_item(item_id)
+
     def clear_shopping_list(self, list_id: str):
-        """Clear all items from a shopping list using targeted fetch."""
+        """Clear a shopping list. On Radicale only what this planner added goes: the list is
+        shared with the assistant app and Tasks.org, so items people added stay."""
+        if self._on_dav(list_id):
+            return {"message": f"Removed {self.dav_list.clear_synced()} planner items"}
         items = self.get_shopping_list_items_for_list(list_id)
         item_ids_to_delete = [item['id'] for item in items if 'id' in item]
         if item_ids_to_delete:
@@ -251,6 +304,8 @@ class UnifiedMealieClient(MealieFetcher):
 
         (The inherited paginated get_shopping_list_items(page, per_page) remains
         available for the vendored MCP tools.)"""
+        if self._on_dav(list_id):
+            return self.dav_list.items()
         res = self.get_shopping_list(list_id)
         if isinstance(res, dict):
             return res.get('listItems', [])

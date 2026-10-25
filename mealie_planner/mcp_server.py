@@ -305,6 +305,43 @@ def get_shopping_list_labels() -> List[Dict[str, Any]]:
         raise ToolError(f"Error fetching labels: {str(e)}") from e
 
 @mcp.tool()
+def get_shopping_list_items() -> List[Dict[str, Any]]:
+    """The active shopping list (the owner's Shopping list, shared with their phone).
+
+    Returns:
+        List[Dict[str, Any]]: items with id, note (what to buy, quantity included), checked
+        and label (aisle). Items without extras.is_synced were added by a person: never delete those.
+    """
+    try:
+        from mealie_planner.config import ACTIVE_LIST_ID
+        return mealie.get_shopping_list_items_for_list(ACTIVE_LIST_ID)
+    except Exception as e:
+        raise ToolError(f"Error reading the shopping list: {str(e)}") from e
+
+@mcp.tool()
+def create_shopping_list_item(note: str, label_id: Optional[str] = None) -> Dict[str, Any]:
+    """Add one item to the active shopping list.
+
+    Args:
+        note: What to buy, quantity first if any (e.g. "2 lbs chicken thighs").
+        label_id: Optional aisle label id from get_shopping_list_labels.
+    """
+    try:
+        from mealie_planner.config import ACTIVE_LIST_ID
+        return mealie.create_shopping_list_item(shopping_list_id=ACTIVE_LIST_ID, note=note, label_id=label_id)
+    except Exception as e:
+        raise ToolError(f"Error adding to the shopping list: {str(e)}") from e
+
+@mcp.tool()
+def delete_shopping_list_item(item_id: str) -> str:
+    """Remove one item from the active shopping list by its id."""
+    try:
+        mealie.delete_shopping_list_item(item_id)
+        return f"Removed {item_id}."
+    except Exception as e:
+        raise ToolError(f"Error removing shopping list item: {str(e)}") from e
+
+@mcp.tool()
 def update_shopping_list_item(
     item_id: str,
     note: Optional[str] = None,
@@ -327,8 +364,8 @@ def update_shopping_list_item(
     try:
         # First fetch current item to preserve other fields
         # Note: We use the internal list items fetcher
-        items_res = mealie.get_shopping_list_items(per_page=1000)
-        items = items_res.get('items', [])
+        from mealie_planner.config import ACTIVE_LIST_ID
+        items = mealie.get_shopping_list_items_for_list(ACTIVE_LIST_ID)
         current_item = next((i for i in items if i['id'] == item_id), None)
         
         if not current_item:
@@ -419,5 +456,12 @@ if __name__ == "__main__":
         pass
 
     register_all_tools(mcp, mealie)
+    # The active list lives on Radicale (radicale_list.py), so the vendored tools that work on
+    # Mealie's own lists by id would edit lists nobody looks at. The overlays above cover it.
+    for name in ("get_shopping_lists", "create_shopping_list", "get_shopping_list", "update_shopping_list",
+                 "delete_shopping_list", "add_recipe_to_shopping_list", "remove_recipe_from_shopping_list",
+                 "get_shopping_list_item", "create_shopping_list_items_bulk", "update_shopping_list_items_bulk",
+                 "delete_shopping_list_items_bulk"):
+        mcp._tool_manager._tools.pop(name, None)
 
     mcp.run()
